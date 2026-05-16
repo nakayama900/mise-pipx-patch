@@ -1,84 +1,105 @@
---- Lists available versions for a tool in this backend
+--- Lists available versions for a pip package or Python git repository.
+---
+--- Tool name format:  PACKAGE_SPEC[|PATCH_SOURCE]
+---   PACKAGE_SPEC  – a PyPI package name (e.g. "black") or a pip git URL
+---                   (e.g. "git+https://github.com/user/repo.git")
+---   PATCH_SOURCE  – optional; separated from PACKAGE_SPEC by "|"
+---                   gist:USER/GIST_ID          – raw content of a GitHub Gist
+---                   https://…  or  http://…    – direct URL to a .diff/.patch file
+---                   /absolute/path             – local patch file
+---
 --- Documentation: https://mise.jdx.dev/backend-plugin-development.html#backendlistversions
---- @param ctx {tool: string} Context (tool = the tool name requested)
---- @return {versions: string[]} Table containing list of available versions
-function PLUGIN:BackendListVersions(ctx)
+--- @param ctx BackendListVersionsCtx
+--- @return BackendListVersionsResult
+function PLUGIN:BackendListVersions(ctx) -- luacheck: ignore
     local tool = ctx.tool
 
-    -- Validate tool name
     if not tool or tool == "" then
         error("Tool name cannot be empty")
     end
 
-    -- Example implementations (choose/modify based on your backend):
-
-    -- Example 1: API-based version listing (like npm, pip, cargo)
+    local strings = require("strings")
     local http = require("http")
     local json = require("json")
 
-    -- Replace with your backend's API endpoint
-    local api_url = "https://api.<BACKEND>.org/packages/" .. tool .. "/versions"
+    -- Extract package spec (the part before the first "|")
+    local parts = strings.split(tool, "|")
+    local package_spec = strings.trim_space(parts[1])
 
-    local resp, err = http.get({
-        url = api_url,
-        -- headers = { ["Authorization"] = "Bearer " .. token } -- if needed
+    -- Git repositories do not have discrete PyPI versions; return "HEAD" as the
+    -- only listable version.  Users can still pin to a specific tag / commit via
+    -- the version field in mise.toml.
+    if strings.has_prefix(package_spec, "git+") then
+        return { versions = { "HEAD" } }
+    end
+
+    -- Extract the base package name, stripping any extras notation such as
+    -- "black[d]" → "black".  The first match stops at "[" so extras are
+    -- already excluded; gsub then trims any trailing non-alphanumeric chars
+    -- (e.g. trailing hyphen from an invalid name).
+    local package_name = package_spec:match("^([%w][%w%-%._%+]*)")
+    if not package_name then
+        error("Invalid package name: " .. package_spec)
+    end
+    package_name = package_name:gsub("[^%w]+$", "")
+
+    -- Query the PyPI JSON API
+    local ok_http, resp_or_err = pcall(http.get, {
+        url = "https://pypi.org/pypi/" .. package_name .. "/json",
+        headers = {
+            ["Accept"] = "application/json",
+            ["User-Agent"] = "mise-pipx-patch/1.0 (+https://github.com/nakayama900/mise-pipx-patch)",
+        },
     })
+    if not ok_http then
+        error("Failed to fetch versions for '" .. package_name .. "': " .. tostring(resp_or_err))
+    end
+    local resp = resp_or_err
 
-    if err then
-        error("Failed to fetch versions for " .. tool .. ": " .. err)
+    if not resp or not resp.status_code then
+        error("Invalid response while fetching versions for '" .. package_name .. "'")
     end
 
     if resp.status_code ~= 200 then
-        error("API returned status " .. resp.status_code .. " for " .. tool)
+        error("Package '" .. package_name .. "' not found on PyPI (HTTP " .. resp.status_code .. ")")
     end
 
-    local data = json.decode(resp.body)
+    local ok_json, data_or_err = pcall(json.decode, resp.body)
+    if not ok_json then
+        error("Failed to parse PyPI metadata for '" .. package_name .. "': " .. tostring(data_or_err))
+    end
+    local data = data_or_err
     local versions = {}
 
-    -- Parse versions from API response (adjust based on your API structure)
-    if data.versions then
-        for _, version in ipairs(data.versions) do
-            table.insert(versions, version)
+    -- The "releases" object maps version string → distribution metadata.
+    -- Keep every release key to avoid depending on a specific JSON table shape.
+    if data.releases then
+        for version_str, _ in pairs(data.releases) do
+            if type(version_str) == "string" and version_str ~= "" then
+                table.insert(versions, version_str)
+            end
         end
     end
 
-    -- Example 2: Command-line based version listing
-    --[[
-    local cmd = require("cmd")
-
-    -- Replace with your backend's command to list versions
-    local command = "<BACKEND> search " .. tool .. " --versions"
-    local result = cmd.exec(command)
-
-    if not result or result:match("error") then
-        error("Failed to fetch versions for " .. tool)
+    -- Fallback to latest if the release map is unavailable or empty.
+    if #versions == 0 and data.info and type(data.info.version) == "string" and data.info.version ~= "" then
+        table.insert(versions, data.info.version)
     end
-
-    local versions = {}
-    -- Parse command output to extract versions
-    for version in result:gmatch("[%d%.]+[%w%-]*") do
-        table.insert(versions, version)
-    end
-    --]]
-
-    -- Example 3: Registry file parsing
-    --[[
-    local file = require("file")
-
-    -- Replace with path to your backend's registry or manifest
-    local registry_path = "/path/to/<BACKEND>/registry/" .. tool .. ".json"
-
-    if not file.exists(registry_path) then
-        error("Tool " .. tool .. " not found in registry")
-    end
-
-    local content = file.read(registry_path)
-    local data = json.decode(content)
-    local versions = data.versions or {}
-    --]]
 
     if #versions == 0 then
-        error("No versions found for " .. tool)
+        error("No versions found for '" .. package_name .. "'")
+    end
+
+    -- Try semver sort; fall back to lexicographic sort for PEP 440 versions
+    -- that are not valid semver (e.g. "23.1", "1.0a1").
+    local ok, sorted = pcall(function()
+        local semver_mod = require("semver")
+        return semver_mod.sort(versions)
+    end)
+    if ok and sorted then
+        versions = sorted
+    else
+        table.sort(versions)
     end
 
     return { versions = versions }
