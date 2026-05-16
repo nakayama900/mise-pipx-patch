@@ -105,9 +105,12 @@ function PLUGIN:BackendInstall(ctx) -- luacheck: ignore
             )
 
             -- Find the downloaded archive and decompress it
-            local archive =
-                cmd.exec("find " .. src_dir .. " -maxdepth 1 \\( -name '*.tar.gz' -o -name '*.zip' \\) | head -1")
+            local archive = cmd.exec("find " .. src_dir .. " -maxdepth 1 -name '*.tar.gz' | head -1")
             archive = strings.trim_space(archive)
+            if archive == "" then
+                archive = cmd.exec("find " .. src_dir .. " -maxdepth 1 -name '*.zip' | head -1")
+                archive = strings.trim_space(archive)
+            end
             if archive == "" then
                 error("No source archive found for " .. package_name .. version_spec)
             end

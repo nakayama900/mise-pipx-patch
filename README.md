@@ -27,7 +27,7 @@ PACKAGE_SPEC[|PATCH_SOURCE]
 | Part | Description |
 |------|-------------|
 | `PACKAGE_SPEC` | PyPI package name (e.g. `black`) or pip git URL (e.g. `git+https://github.com/user/repo.git`) |
-| `\|PATCH_SOURCE` | *(optional)* Patch to apply before installing, separated by a `\|` character |
+| `\|PATCH_SOURCE` | *(optional)* Patch to apply before installing, separated by a `\|` character in the tool name |
 
 ### Supported patch sources
 
