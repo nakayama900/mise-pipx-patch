@@ -44,26 +44,46 @@ function PLUGIN:BackendListVersions(ctx) -- luacheck: ignore
     package_name = package_name:gsub("[^%w]+$", "")
 
     -- Query the PyPI JSON API
-    local resp, err = http.get({ url = "https://pypi.org/pypi/" .. package_name .. "/json" })
-    if err then
-        error("Failed to fetch versions for '" .. package_name .. "': " .. tostring(err))
+    local ok_http, resp_or_err = pcall(http.get, {
+        url = "https://pypi.org/pypi/" .. package_name .. "/json",
+        headers = {
+            ["Accept"] = "application/json",
+            ["User-Agent"] = "mise-pipx-patch/1.0 (+https://github.com/nakayama900/mise-pipx-patch)",
+        },
+    })
+    if not ok_http then
+        error("Failed to fetch versions for '" .. package_name .. "': " .. tostring(resp_or_err))
+    end
+    local resp = resp_or_err
+
+    if not resp or not resp.status_code then
+        error("Invalid response while fetching versions for '" .. package_name .. "'")
     end
 
     if resp.status_code ~= 200 then
         error("Package '" .. package_name .. "' not found on PyPI (HTTP " .. resp.status_code .. ")")
     end
 
-    local data = json.decode(resp.body)
+    local ok_json, data_or_err = pcall(json.decode, resp.body)
+    if not ok_json then
+        error("Failed to parse PyPI metadata for '" .. package_name .. "': " .. tostring(data_or_err))
+    end
+    local data = data_or_err
     local versions = {}
 
-    -- The "releases" object maps version string → array of distribution files.
-    -- Only include versions that have at least one published file.
+    -- The "releases" object maps version string → distribution metadata.
+    -- Keep every release key to avoid depending on a specific JSON table shape.
     if data.releases then
-        for version_str, files in pairs(data.releases) do
-            if #files > 0 then
+        for version_str, _ in pairs(data.releases) do
+            if type(version_str) == "string" and version_str ~= "" then
                 table.insert(versions, version_str)
             end
         end
+    end
+
+    -- Fallback to latest if the release map is unavailable or empty.
+    if #versions == 0 and data.info and type(data.info.version) == "string" and data.info.version ~= "" then
+        table.insert(versions, data.info.version)
     end
 
     if #versions == 0 then
