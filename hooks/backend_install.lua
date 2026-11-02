@@ -164,15 +164,15 @@ function PLUGIN:BackendInstall(ctx) -- luacheck: ignore
             local raw_url = gist_raw_url(gist_path)
             log.info("Downloading patch from Gist: " .. raw_url)
             patch_file = install_path .. "/patch.diff"
-            local ok, dl_err = pcall(http.download_file, { url = raw_url }, patch_file)
-            if not ok then
+            local dl_err = http.download_file({ url = raw_url }, patch_file)
+            if dl_err then
                 error("Failed to download patch from Gist '" .. gist_path .. "': " .. tostring(dl_err))
             end
         elseif strings.has_prefix(patch_source, "https://") or strings.has_prefix(patch_source, "http://") then
             log.info("Downloading patch from URL: " .. patch_source)
             patch_file = install_path .. "/patch.diff"
-            local ok, dl_err = pcall(http.download_file, { url = patch_source }, patch_file)
-            if not ok then
+            local dl_err = http.download_file({ url = patch_source }, patch_file)
+            if dl_err then
                 error("Failed to download patch from URL '" .. patch_source .. "': " .. tostring(dl_err))
             end
         else

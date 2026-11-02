@@ -44,17 +44,19 @@ function PLUGIN:BackendListVersions(ctx) -- luacheck: ignore
     package_name = package_name:gsub("[^%w]+$", "")
 
     -- Query the PyPI JSON API
-    local ok_http, resp_or_err = pcall(http.get, {
+    -- mise's http functions are async and cannot be wrapped in pcall
+    -- ("attempt to yield across metamethod/C-call boundary"); they return
+    -- (resp, err) instead of raising.
+    local resp, http_err = http.get({
         url = "https://pypi.org/pypi/" .. package_name .. "/json",
         headers = {
             ["Accept"] = "application/json",
             ["User-Agent"] = "mise-pipx-patch/1.0 (+https://github.com/nakayama900/mise-pipx-patch)",
         },
     })
-    if not ok_http then
-        error("Failed to fetch versions for '" .. package_name .. "': " .. tostring(resp_or_err))
+    if http_err then
+        error("Failed to fetch versions for '" .. package_name .. "': " .. tostring(http_err))
     end
-    local resp = resp_or_err
 
     if not resp or not resp.status_code then
         error("Invalid response while fetching versions for '" .. package_name .. "'")
