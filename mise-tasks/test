@@ -11,7 +11,7 @@ mise cache clear
 TEST_TOOL="black"
 
 echo "=== Testing version listing for ${TEST_TOOL} ==="
-if mise ls-remote "pipx-patch:${TEST_TOOL}" 2>/dev/null | tail -5; then
+if mise ls-remote "pipx-patch:${TEST_TOOL}" | tail -5; then
     echo "✓ Version listing works"
 else
     echo "✗ Version listing failed" >&2
