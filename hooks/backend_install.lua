@@ -12,6 +12,29 @@
 --- BackendExecEnv adds install_path/venv/bin to PATH.
 ---
 --- Documentation: https://mise.jdx.dev/backend-plugin-development.html#backendinstall
+--- Quote a string for safe use as a single POSIX shell argument.
+--- @param s string
+--- @return string
+local function q(s)
+    return "'" .. tostring(s):gsub("'", "'\\''") .. "'"
+end
+
+--- Build the raw URL for a Gist patch source ("USER/GIST_ID[/FILENAME]").
+--- GitHub serves raw gists at .../USER/GIST_ID/raw[/FILENAME].
+--- @param gist_path string
+--- @return string
+local function gist_raw_url(gist_path)
+    local user, id, filename = gist_path:match("^([^/]+)/([^/]+)/?(.*)$")
+    if not user then
+        error("Invalid Gist spec, expected gist:USER/GIST_ID[/FILENAME]: " .. gist_path)
+    end
+    local url = "https://gist.githubusercontent.com/" .. user .. "/" .. id .. "/raw"
+    if filename ~= "" then
+        url = url .. "/" .. filename
+    end
+    return url
+end
+
 --- @param ctx BackendInstallCtx
 --- @return BackendInstallResult
 function PLUGIN:BackendInstall(ctx) -- luacheck: ignore
@@ -49,11 +72,11 @@ function PLUGIN:BackendInstall(ctx) -- luacheck: ignore
     -- -------------------------------------------------------------------------
     -- Prepare the install directory and create a virtual environment
     -- -------------------------------------------------------------------------
-    cmd.exec("mkdir -p " .. install_path)
+    cmd.exec("mkdir -p " .. q(install_path))
     local venv_path = install_path .. "/venv"
     log.info("Creating virtual environment at " .. venv_path)
-    cmd.exec("python3 -m venv " .. venv_path)
-    local pip = venv_path .. "/bin/pip"
+    cmd.exec("python3 -m venv " .. q(venv_path))
+    local pip = q(venv_path .. "/bin/pip")
 
     -- -------------------------------------------------------------------------
     -- Determine whether we need to apply a patch
@@ -61,7 +84,7 @@ function PLUGIN:BackendInstall(ctx) -- luacheck: ignore
     if patch_source then
         -- Work from source: download/clone → apply patch → pip install .
         local src_dir = install_path .. "/src"
-        cmd.exec("mkdir -p " .. src_dir)
+        cmd.exec("mkdir -p " .. q(src_dir))
 
         if is_git then
             -- Clone a Python git repository
@@ -76,10 +99,10 @@ function PLUGIN:BackendInstall(ctx) -- luacheck: ignore
             end
 
             log.info("Cloning " .. url_base)
-            cmd.exec("git clone " .. url_base .. " " .. src_dir)
+            cmd.exec("git clone " .. q(url_base) .. " " .. q(src_dir))
             if ref and ref ~= "" then
                 log.info("Checking out " .. ref)
-                cmd.exec("git -C " .. src_dir .. " checkout " .. ref)
+                cmd.exec("git -C " .. q(src_dir) .. " checkout " .. q(ref))
             end
         else
             -- Download the PyPI source distribution (.tar.gz or .zip)
@@ -98,17 +121,16 @@ function PLUGIN:BackendInstall(ctx) -- luacheck: ignore
             cmd.exec(
                 pip
                     .. " download --no-deps --no-binary :all: -d "
-                    .. src_dir
+                    .. q(src_dir)
                     .. " "
-                    .. package_name
-                    .. version_spec
+                    .. q(package_name .. version_spec)
             )
 
             -- Find the downloaded archive and decompress it
-            local archive = cmd.exec("find " .. src_dir .. " -maxdepth 1 -name '*.tar.gz' | head -1")
+            local archive = cmd.exec("find " .. q(src_dir) .. " -maxdepth 1 -name '*.tar.gz' | head -1")
             archive = strings.trim_space(archive)
             if archive == "" then
-                archive = cmd.exec("find " .. src_dir .. " -maxdepth 1 -name '*.zip' | head -1")
+                archive = cmd.exec("find " .. q(src_dir) .. " -maxdepth 1 -name '*.zip' | head -1")
                 archive = strings.trim_space(archive)
             end
             if archive == "" then
@@ -116,13 +138,13 @@ function PLUGIN:BackendInstall(ctx) -- luacheck: ignore
             end
 
             local extract_dir = src_dir .. "/extracted"
-            cmd.exec("mkdir -p " .. extract_dir)
+            cmd.exec("mkdir -p " .. q(extract_dir))
             local archiver = require("archiver")
             archiver.decompress(archive, extract_dir)
 
             -- pip source distributions unpack to a single PACKAGE-VERSION/ dir
             local extracted =
-                cmd.exec("find " .. extract_dir .. " -maxdepth 1 -mindepth 1 -type d | head -1")
+                cmd.exec("find " .. q(extract_dir) .. " -maxdepth 1 -mindepth 1 -type d | head -1")
             extracted = strings.trim_space(extracted)
             if extracted ~= "" then
                 src_dir = extracted
@@ -139,7 +161,7 @@ function PLUGIN:BackendInstall(ctx) -- luacheck: ignore
         if strings.has_prefix(patch_source, "gist:") then
             -- Format: gist:USER/GIST_ID  or  gist:USER/GIST_ID/FILENAME
             local gist_path = patch_source:sub(6) -- strip "gist:"
-            local raw_url = "https://gist.githubusercontent.com/" .. gist_path .. "/raw"
+            local raw_url = gist_raw_url(gist_path)
             log.info("Downloading patch from Gist: " .. raw_url)
             patch_file = install_path .. "/patch.diff"
             local ok, dl_err = pcall(http.download_file, { url = raw_url }, patch_file)
@@ -166,13 +188,13 @@ function PLUGIN:BackendInstall(ctx) -- luacheck: ignore
         -- Apply the patch
         -- ---------------------------------------------------------------------
         log.info("Applying patch " .. patch_file .. " to " .. src_dir)
-        cmd.exec("patch -p1 -d " .. src_dir .. " < " .. patch_file)
+        cmd.exec("patch -p1 -d " .. q(src_dir) .. " < " .. q(patch_file))
 
         -- ---------------------------------------------------------------------
         -- Install the patched package into the virtualenv
         -- ---------------------------------------------------------------------
         log.info("Installing patched package from " .. src_dir)
-        cmd.exec(pip .. " install " .. src_dir)
+        cmd.exec(pip .. " install " .. q(src_dir))
     else
         -- No patch – install directly with pip
         if is_git then
@@ -184,7 +206,7 @@ function PLUGIN:BackendInstall(ctx) -- luacheck: ignore
                 end
             end
             log.info("Installing from git: " .. install_spec)
-            cmd.exec(pip .. " install " .. install_spec)
+            cmd.exec(pip .. " install " .. q(install_spec))
         else
             local package_name = package_spec:match("^([%w][%w%-%._%+]*)")
             if not package_name then
@@ -198,7 +220,7 @@ function PLUGIN:BackendInstall(ctx) -- luacheck: ignore
             end
 
             log.info("Installing " .. package_name .. version_spec)
-            cmd.exec(pip .. " install " .. package_name .. version_spec)
+            cmd.exec(pip .. " install " .. q(package_name .. version_spec))
         end
     end
 
